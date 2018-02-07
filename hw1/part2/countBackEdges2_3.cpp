@@ -1,65 +1,73 @@
-//===- Hello.cpp - Example code from "Writing an LLVM Pass" ---------------===//
-//
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
-//
-//===----------------------------------------------------------------------===//
-//
-// This file implements two versions of the LLVM "Hello World" pass described
-// in docs/WritingAnLLVMPass.html
-//
-//===----------------------------------------------------------------------===//
+/*
+ *  
+ *  
+ * ______                        
+ *|  ____|                       
+ *| |__ __ _ _ __ _______  _ __  
+ *|  __/ _` | '__|_  / _ \| '_ \
+ *| | | (_| | |   / / (_) | | | |
+ *|_|  \__,_|_|  /___\___/|_| |_|
+ *
+ *  Created by Farzon Lotfi.
+ *  Copyright 2018 Georgia Tech. All rights reserved.
+ *
+ */
 
-#include "llvm/ADT/Statistic.h"
+//#include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
-#define DEBUG_TYPE "hello"
 
-STATISTIC(HelloCounter, "Counts number of functions greeted");
+//STATISTIC(HelloCounter, "Counts number of functions greeted");
 
-namespace {
-  // Hello - The first implementation, without getAnalysisUsage.
-  struct Hello : public FunctionPass {
+namespace 
+{
+  struct BackEdgeDetector : public LoopInfoWrapperPass /*FunctionPass*/
+  {
     static char ID; // Pass identification, replacement for typeid
-    Hello() : FunctionPass(ID) {}
-
-    bool runOnFunction(Function &F) override {
-      ++HelloCounter;
-      errs() << "Hello: ";
-      errs().write_escaped(F.getName()) << '\n';
-      return false;
+    BackEdgeDetector() : LoopInfoWrapperPass() /*FunctionPass(ID)*/ {}
+    virtual ~BackEdgeDetector() {}
+    bool runOnFunction(Function &F) override
+    {
+        errs().write_escaped(F.getName()) << '\n';
+        getBackEdgeInfo(F);
+        return false;
     }
+      
+    void getAnalysisUsage(AnalysisUsage &AU) const override
+    {
+        AU.setPreservesCFG();
+        AU.addRequired<LoopInfoWrapperPass>();
+    }
+    
+    void getBackEdgeInfo(const Function& F) const
+    {
+        LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+        int backEdgesCount = 0;
+        int currTreeDepth = 0;
+        int prevTreeDepth = 0;
+        
+        for (Function::const_iterator iter = F.begin(); iter != F.end(); ++iter)
+        {
+          currTreeDepth = loopInfo.getLoopDepth(&*iter);
+          errs() << "current tree depth: " << currTreeDepth << '\n';
+          //Back edges point from a node to one of its ancestors in the DFS tree.
+          // therefore the prevDepth should be larger than the current depth
+          if (prevTreeDepth > currTreeDepth)
+          {
+            backEdgesCount++;
+          }
+
+          prevTreeDepth = currTreeDepth;
+        }
+        errs() << "Total back edges: " << backEdgesCount << '\n';
+      }
   };
 }
 
-char Hello::ID = 0;
-static RegisterPass<Hello> X("hello", "Hello World Pass");
-
-namespace {
-  // Hello2 - The second implementation with getAnalysisUsage implemented.
-  struct Hello2 : public FunctionPass {
-    static char ID; // Pass identification, replacement for typeid
-    Hello2() : FunctionPass(ID) {}
-
-    bool runOnFunction(Function &F) override {
-      ++HelloCounter;
-      errs() << "Hello: ";
-      errs().write_escaped(F.getName()) << '\n';
-      return false;
-    }
-
-    // We don't modify the program, so we preserve all analyses.
-    void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.setPreservesAll();
-    }
-  };
-}
-
-char Hello2::ID = 0;
-static RegisterPass<Hello2>
-Y("hello2", "Hello World Pass (with getAnalysisUsage implemented)");
+char BackEdgeDetector::ID = 0;
+static RegisterPass<BackEdgeDetector>
+X("backedge", "back Edge detector pass");
