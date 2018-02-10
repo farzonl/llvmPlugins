@@ -58,17 +58,65 @@ int main(int argc,char**argv)
 	int f = 6;       //----------------------- | BLOCK 6
 }
 
-/*int main()
+int whileLoopTest()
 {
   int i = 0;
-start: printf("start");
   while(i < 10)
   {
-    printf("count is %d\n",i);
     i++;
-    goto start;
   }
-}*/
+  return 0;
+}
+
+int threewhileLoopTest()
+{
+  int i = 0;
+  while(i < 10)
+  {
+    i++;
+  }
+  i = 0;
+  while(i < 10)
+  {
+    i++;
+  }
+  i = 0;
+  while(i < 10)
+  {
+    i++;
+  }
+  return 0;
+}
+
+int nestedwhileLoopTest()
+{
+  int i = 0;
+  while(i < 10)
+  {
+    int j = 0;
+    while (j < 5)
+    {
+      j++;
+    }
+    i++;
+  }
+  return 0;
+}
+
+int twoforLoopTest()
+{
+  int a = 0;
+  for (int i = 0; i < 5; i++)
+  {
+    a = (a+1) + a;
+  }
+  for (int i = 0; i < 5; i++)
+  {
+    a = (a+1) + a;
+  }
+  return a;
+}
+
 /*
 int main(int argc,char**argv)
 {

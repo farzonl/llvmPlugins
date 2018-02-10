@@ -25,8 +25,59 @@
 using json = nlohmann::json;
 using namespace llvm;
 
+#define TEST true
 
-//STATISTIC(HelloCounter, "Counts number of functions greeted");
+namespace
+{
+    class HelperFunctions
+    {
+    public:
+        static json createAndWriteJson(const std::vector<int> & vecCount,
+                                  const std::vector<std::string> & vecFuncName,
+                                  const std::string &countName)
+        {
+            std::valarray<int> seq {vecCount.data(), vecCount.size()};
+            double average = seq.sum()/static_cast<double>(vecCount.size());
+            int iMax = seq.max();
+            int iMin = seq.min();
+            std::string sMaxFuncName;
+            std::string sMinFuncName;
+            for (size_t i = 0; i < vecCount.size(); i++)
+            {
+                if(iMax == vecCount[i])
+                {
+                    sMaxFuncName = vecFuncName[i];
+                }
+                if(iMin == vecCount[i])
+                {
+                    sMinFuncName = vecFuncName[i];
+                }
+            }
+            json j;
+            j["Minimum"] = { {"functionName", sMinFuncName}, {countName, iMin} };
+            j["Maximum"] = { {"functionName", sMaxFuncName}, {countName, iMax} };
+            j["Average"] = average;
+
+#if TEST
+            json jTest;
+            for (size_t i = 0; i < vecCount.size(); i++)
+            {
+                jTest[i] = { {"functionName", vecFuncName[i]}, {countName, vecCount[i]} };
+            }
+            j["Test"] = jTest;
+#endif
+
+            std::ofstream o("testResults/"+countName+".json");
+            o << std::setw(4) << j << std::endl;
+#if TEST
+            j.erase("Test");
+#endif
+            return j;
+        }
+    private:
+        HelperFunctions() = delete;
+    };
+}
 
 namespace
 {
@@ -40,7 +91,6 @@ namespace
         virtual ~BasicBlockFuncCounter() {}
         bool runOnFunction(Function &F) override
         {
-            //errs().write_escaped(F.getName()) << '\n';
             getBasicBlockInfo(F);
             return false;
         }
@@ -48,48 +98,13 @@ namespace
         //An iterator over a Function gives us a list of basic blocks.
         void getBasicBlockInfo(const Function& func) const
         {
-            //int basicBlockCount = 0;
-            /*const Function::BasicBlockListType &blocks =func.getBasicBlockList();
-            for (Function::BasicBlockListType::const_iterator bIter = blocks.begin(); bIter != blocks.end(); ++bIter)
-            {
-                basicBlockCount++;
-            }*/
-            /*for (Function::const_iterator fIter = func.begin(); fIter != func.end(); ++fIter)
-            {
-                basicBlockCount++;
-            }*/
             vecBasicBlockCount.push_back(func.size());
             vecBasicBlockFuncName.push_back(func.getName());
-            //errs() << "# of basic blocks: " << basicBlockCount << '\n';
-            //errs() << "# of basic blocks: " << func.size() << '\n';
         }
 
         bool doFinalization(Module &M) override {
-            std::valarray<int> seq {vecBasicBlockCount.data(), vecBasicBlockCount.size()};
-            double average = seq.sum()/static_cast<double>(vecBasicBlockCount.size());
-            int iMax = seq.max();
-            int iMin = seq.min();
-            std::string sMaxFuncName;
-            std::string sMinFuncName;
-            for (size_t i = 0; i < vecBasicBlockCount.size(); i++)
-            {
-                if(iMax == vecBasicBlockCount[i])
-                {
-                    sMaxFuncName = vecBasicBlockFuncName[i];
-                }
-                if(iMin == vecBasicBlockCount[i])
-                {
-                    sMinFuncName = vecBasicBlockFuncName[i];
-                }
-            }
-            json j;
-            j["Minimum"] = { {"functionName", sMinFuncName}, {"blockCount", iMin} };
-            j["Maximum"] = { {"functionName", sMaxFuncName}, {"blockCount", iMax} };
-            j["Average"] = average;
-            
+            json j = HelperFunctions::createAndWriteJson(vecBasicBlockCount, vecBasicBlockFuncName, "BasicBlockCount");
             errs() << j.dump();
-            std::ofstream o("testResults/BasicBlockCount.json");
-            o << std::setw(4) << j << std::endl;
             return false;
         }
 
@@ -104,7 +119,7 @@ X("basicblock", "basic block function counter pass");
 
 namespace
 {
-    //1. Average, maximum and minimum number of basic blocks inside functions.
+    // 2. Average, maximum and minimum number of CFG edges inside functions.
     struct CFGEdgeCounter : public FunctionPass
     {
         static std::vector<int> veccCFGEdgeCount;
@@ -135,31 +150,9 @@ namespace
         }
         
         bool doFinalization(Module &M) override {
-            std::valarray<int> seq {veccCFGEdgeCount.data(), veccCFGEdgeCount.size()};
-            double average = seq.sum()/static_cast<double>(veccCFGEdgeCount.size());
-            int iMax = seq.max();
-            int iMin = seq.min();
-            std::string sMaxFuncName;
-            std::string sMinFuncName;
-            for (size_t i = 0; i < veccCFGEdgeCount.size(); i++)
-            {
-                if(iMax == veccCFGEdgeCount[i])
-                {
-                    sMaxFuncName = vecCFGEdgeFuncName[i];
-                }
-                if(iMin == veccCFGEdgeCount[i])
-                {
-                    sMinFuncName = vecCFGEdgeFuncName[i];
-                }
-            }
-            json j;
-            j["Minimum"] = { {"functionName", sMinFuncName}, {"blockCount", iMin} };
-            j["Maximum"] = { {"functionName", sMaxFuncName}, {"blockCount", iMax} };
-            j["Average"] = average;
             
+            json j = HelperFunctions::createAndWriteJson(veccCFGEdgeCount, vecCFGEdgeFuncName, "CFGEdgeCount");
             errs() << j.dump();
-            std::ofstream o("testResults/CFGEdgeCount.json");
-            o << std::setw(4) << j << std::endl;
             return false;
         }
     };
@@ -173,15 +166,16 @@ Y("cfgedge", "cfg edge function counter pass");
 
 namespace
 {
-  // 2. Average, maximum and minimum number of CFG edges inside functions.
+  //3. Average, maximum and minimum number of single entry loops inside functions (count each loop based on a back edge).
   struct BackEdgeDetector : public /*LoopInfoWrapperPass*/ FunctionPass
   {
+    static std::vector<int> vecBackEdgeCount;
+    static std::vector<std::string> vecBackEdgeFuncName;
     static char ID; // Pass identification, replacement for typeid
     BackEdgeDetector() : /*LoopInfoWrapperPass()*/ FunctionPass(ID) {}
     virtual ~BackEdgeDetector() {}
     bool runOnFunction(Function &F) override
     {
-        errs().write_escaped(F.getName()) << '\n';
         getBackEdgeInfo(F);
         return false;
     }
@@ -196,38 +190,25 @@ namespace
     {
         LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
         int backEdgesCount = 0;
-        int currTreeDepth = 0;
-        int prevTreeDepth = 0;
-        int loopCounter = 0;
-        for (LoopInfo::iterator iter = loopInfo.begin(); iter != loopInfo.end(); ++iter)
+        for (Loop::iterator iter = loopInfo.begin(); iter != loopInfo.end(); ++iter)
         {
+            backEdgesCount+=(*iter)->getNumBackEdges();
             
-            Loop *loop =*iter;
-            loopCounter++;
-            int loopBlockCounter = 0;
-
-            for(Loop::block_iterator bIter = loop->block_begin(); bIter != loop->block_end(); ++bIter)
-            {
-                loopBlockCounter++;
-            }
-            errs() << "# of blocks of loops: " << loopBlockCounter << '\n';
-          currTreeDepth = (*iter)->getLoopDepth();
-          errs() << "current tree depth: " << currTreeDepth << '\n';
-          //Back edges point from a node to one of its ancestors in the DFS tree.
-          // therefore the prevDepth should be larger than the current depth
-          if (prevTreeDepth > currTreeDepth)
-          {
-            backEdgesCount++;
-          }
-
-          prevTreeDepth = currTreeDepth;
         }
-        errs() << "# of loops: " << loopCounter << '\n';
-        errs() << "Total back edges: " << backEdgesCount << '\n';
-      }
+        vecBackEdgeCount.push_back(backEdgesCount);
+        vecBackEdgeFuncName.push_back(func.getName());
+    }
+    
+    bool doFinalization(Module &M) override {
+        json j = HelperFunctions::createAndWriteJson(vecBackEdgeCount, vecBackEdgeFuncName, "BackEdgeCount");
+        errs() << j.dump();
+        return false;
+    }
   };
 }
 
+std::vector<int> BackEdgeDetector::vecBackEdgeCount;
+std::vector<std::string> BackEdgeDetector::vecBackEdgeFuncName;
 char BackEdgeDetector::ID = 0;
 static RegisterPass<BackEdgeDetector>
 Z("backedge", "back Edge detector pass");
