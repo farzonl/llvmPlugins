@@ -18,9 +18,13 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Analysis/PostDominators.h"
+
 #include <nlohmann/json.hpp>
 #include<valarray>
 #include <fstream>
+#include <sstream>      // std::stringstream, std::stringbuf
+
 
 using json = nlohmann::json;
 using namespace llvm;
@@ -159,9 +163,9 @@ namespace
             for (Function::BasicBlockListType::const_iterator bIter = blocks.begin(); bIter != blocks.end(); ++bIter)
             {
                 const BasicBlock &block = *bIter;
-                const TerminatorInst *TInst = block.getTerminator();
+                const TerminatorInst *termInst = block.getTerminator();
                 // count the jumps
-                numEdges += TInst->getNumSuccessors();
+                numEdges += termInst->getNumSuccessors();
             }
             veccCFGEdgeCount.push_back(numEdges);
             vecCFGEdgeFuncName.push_back(func.getName());
@@ -517,8 +521,535 @@ namespace
     };
 }
 
+
 std::vector<int> LoopExitCFGCount::vecExitCFGLoopCount;
 std::vector<std::string> LoopExitCFGCount::vecExitCFGLoopFuncNames;
 char LoopExitCFGCount::ID = 0;
 static RegisterPass<LoopExitCFGCount>
 E("exitcfgloops", "counts loop exit CFG edges.");
+
+namespace
+{
+    typedef std::map<const BasicBlock *, std::map<const BasicBlock *, int> > matBasicBlocks;
+    typedef std::map<const BasicBlock *, std::map<const BasicBlock *, const BasicBlock *> > matSucBasicBlocks;
+    typedef std::vector<const BasicBlock *> basicBlockPath;
+    ///3.2 Using the cycles detected, determine the number of single entry loops as well as multi-entry loop.
+    
+    //ex. A loop is a cycle characterized by the entry point. For example, if a cycle is entered at two different points
+    // (multi-entry), it is to be counted as two separate loops.
+    
+    // part 2: compare the time taken for your algorithm with that the originally
+    // implemented dominator based single entry loop detector
+    
+    // part 3: Also compare the number of additional loops detected by your algorithm vs the dominator based one
+    //  part 4: Is Mr. Compiler justified in changing the loop detector?
+    struct Warshall3_2 : public FunctionPass
+    {
+        static char ID; // Pass identification, replacement for typeid
+        const int infinity = SHRT_MAX;
+        const int minValue = 1;
+        static std::vector<int> vecWarshallCounts;
+        static std::vector<std::string> vecWarshallFuncName;
+        Warshall3_2() :  FunctionPass(ID) {}
+        virtual ~Warshall3_2() {}
+        
+        bool runOnFunction(Function &F) override
+        {
+            errs() << F.getName();
+            matBasicBlocks dist;
+            matSucBasicBlocks next;
+            warhsalAlgo(F, dist, next);
+            pathReconstruction(F, dist, next);
+            return false;
+        }
+        
+        void printMap(matBasicBlocks &aMap)
+        {
+            for (auto& t : aMap)
+            {
+                for (auto& tt : t.second)
+                {
+                    if(tt.second == SHRT_MAX)
+                        errs() << "INF ";
+                    else
+                        errs() << " " << tt.second << "  ";
+                }
+                errs() << "\n";
+            }
+        }
+        
+        void printMap(matSucBasicBlocks &aMap)
+        {
+            
+            for (auto& t : aMap)
+            {
+                (t.first)->printAsOperand(errs(), false);
+                errs() << ": ";
+                for (auto& tt : t.second)
+                {
+                    if(tt.second == nullptr)
+                    {
+                        errs() << "NULL ";
+                    }
+                    else
+                    {
+                        errs() << " ";
+                        (tt.second)->printAsOperand(errs(), false);
+                        errs() << "  ";
+                    }
+                }
+                errs() << "\n";
+            }
+        }
+        void printMapPointer(matSucBasicBlocks &aMap)
+        {
+            for (auto& t : aMap)
+            {
+                for (auto& tt : t.second)
+                {
+                    if(tt.second == nullptr)
+                    {
+                        errs() << "nullptr        ";
+                    }
+                    else
+                    {
+                       errs() << tt.second << "  ";
+                    }
+                }
+                errs() << "\n";
+            }
+        }
+        
+        void printVector(basicBlockPath &avector)
+        {
+            errs() << "[";
+            for (auto v = avector.begin(); v != avector.end(); ++v)
+            {
+                (*v)->printAsOperand(errs(), false);
+                errs() << " ";
+            }
+            errs() << "]\n";
+        }
+        /*
+         https://en.wikipedia.org/wiki/Floyd%E2%80%93Warshall_algorithm#Path_reconstruction
+        procedure Path(u, v)
+            if next[u][v] = null then
+                return []
+            path = [u]
+            while u ≠ v
+                u ← next[u][v]
+                path.append(u)
+            return path
+        */
+        basicBlockPath Path(const BasicBlock *u, const BasicBlock *v, matSucBasicBlocks &next)
+        {
+            if(next[u][v] == nullptr)
+            {
+                return basicBlockPath();
+            }
+            basicBlockPath path;
+            path.push_back(u);
+            const BasicBlock *u_inc = u;
+            while(u_inc != v)
+            {
+                u_inc = next[u_inc][v];
+                path.push_back(u_inc);
+            }
+            return path;
+        }
+        
+        basicBlockPath mergePaths(const basicBlockPath &vuPath,const basicBlockPath &uvPath)
+        {
+            basicBlockPath concatPath;
+            if(vuPath.size() > 0)
+            {
+                concatPath.insert(concatPath.end(), vuPath.begin(), vuPath.end());
+            }
+            if(vuPath.size() > 0)
+            {
+                if(concatPath.back() == uvPath.front())
+                {
+                    concatPath.pop_back();
+                }
+                
+                concatPath.insert(concatPath.end(), uvPath.begin(), uvPath.end());
+            }
+            return concatPath;
+        }
+        
+        std::string getPathHash(const basicBlockPath &path)
+        {
+            std::stringstream ss;
+            for (auto v = path.begin(); v != path.end(); ++v)
+            {
+                 ss << *v << " ";
+            }
+            return ss.str();
+        }
+        
+        int LoopCounter(Function &func, basicBlockPath &path, std::map<std::string,bool> &seenPathsPred)
+        {
+            DominatorTree *DomTree = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+            int iLoopCounter = 0;
+            for (auto node = path.begin(); node != path.end(); ++node)
+            {
+                const BasicBlock* searchNode = *node;
+                for (Function::const_iterator iter = func.begin(); iter != func.end(); ++iter)
+                {
+                    bool done = false;
+                    const BasicBlock &currBlock = *iter;
+                    if(std::find(path.begin(), path.end(), &currBlock) == path.end())
+                    {
+                        const TerminatorInst *termInst = currBlock.getTerminator();
+                        for (unsigned int v_succIndex = 0; v_succIndex < termInst->getNumSuccessors(); v_succIndex++)
+                        {
+                             const BasicBlock *v_succ = termInst->getSuccessor(v_succIndex);
+                            if(v_succ == searchNode)
+                            {
+                                if (!DomTree->dominates(searchNode, &currBlock))
+                                {
+                                    basicBlockPath predList;
+                                    predList.push_back(&currBlock);
+                                    predList.push_back(searchNode);
+                                    std::string predListHash = getPathHash(predList);
+                                    errs() << "\npath: " << predListHash << "\n";
+                                    /*errs() << "[ (";
+                                    searchNode->printAsOperand(errs(), false);
+                                    errs() << " ," << searchNode << "), ";
+                                    v_succ->printAsOperand(errs(), false);
+                                    errs() << " ," << v_succ << ") ]\n";*/
+                                    if(seenPathsPred.find(predListHash) == seenPathsPred.end())
+                                    {
+                                        seenPathsPred[predListHash] = true;
+                                        iLoopCounter++;
+                                        done = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if(done) break;
+                }
+            }
+            return iLoopCounter;
+        }
+        
+        bool areVectorsPermutations(basicBlockPath & path1, basicBlockPath & path2)
+        {
+            if(path1.size() != path2.size())
+            {
+                return false;
+            }
+            for(size_t i = 0; i < path1.size(); i++)
+            {
+                bool bExists = false;
+                for(size_t j = 0; j < path2.size(); j++)
+                {
+                    if(path1[i] == path2[j])
+                    {
+                        bExists =  true;
+                        break;
+                    }
+                }
+                if (bExists == false)
+                {
+                    return false;
+                }
+            }
+            
+            return true;
+        }
+        
+        void pathReconstruction(Function &func, matBasicBlocks &dist, matSucBasicBlocks &next)
+        {
+            int iLoopCounter = 0;
+            std::map<std::string,bool> seenPathCombos;
+            std::map<std::string,bool> seenPathsPred;
+            std::vector<basicBlockPath> seenPaths;
+            for (Function::const_iterator v_iter = func.begin(); v_iter != func.end(); ++v_iter)
+            {
+                const BasicBlock *v_Block = &*v_iter;
+                for (Function::const_iterator u_iter = func.begin(); u_iter != func.end(); ++u_iter)
+                {
+                    const BasicBlock *u_Block = &*u_iter;
+                    
+                    if (dist[v_Block][u_Block] == infinity || //skip non-weighted path
+                        dist[u_Block][v_Block] == infinity ||
+                        dist[v_Block][u_Block] == 0        || // skip [v][v]
+                        dist[u_Block][v_Block] == 0)
+                    {
+                        continue;
+                    }
+                    basicBlockPath vuPath = Path(v_Block, u_Block, next);
+                    basicBlockPath uvPath = Path(u_Block, v_Block, next);
+                    basicBlockPath path = mergePaths(vuPath, uvPath);
+                    std::string pathHash = getPathHash(path);
+                    
+                    if(seenPathCombos.find(pathHash) == seenPathCombos.end())
+                    {
+                        seenPathCombos[pathHash] = true;
+                        
+                        if(path.front() == path.back())
+                        {
+                            
+                            path.pop_back(); // we found a cycle make it a-cyclic
+                            bool addToSeenPaths = true;
+                            for (auto seenPathIter = seenPaths.begin(); seenPathIter != seenPaths.end(); ++seenPathIter)
+                            {
+                                basicBlockPath seenPath =*seenPathIter;
+                                if(areVectorsPermutations(seenPath,path))
+                                {
+                                    addToSeenPaths = false;
+                                }
+                                
+                            }
+                            if(addToSeenPaths)
+                            {
+                                errs() << "\nnew path found:\n";
+                                printVector(path);
+                                seenPaths.push_back(path);
+                                iLoopCounter += LoopCounter(func, path, seenPathsPred);
+                            }
+                        }
+                        else
+                        {
+                            errs() << "path does not have a cycle exiting loop";
+                        }
+                        
+                    }
+                }
+            }
+            vecWarshallCounts.push_back(iLoopCounter);
+            vecWarshallFuncName.push_back(func.getName());
+            //errs() << "Loop Count: " << iLoopCounter << "\n";
+        }
+        
+        void warhsalAlgo(Function &func, matBasicBlocks &dist, matSucBasicBlocks &next)
+        {
+            /*
+             https://en.wikipedia.org/wiki/Floyd%E2%80%93Warshall_algorithm
+             1 let dist be a |V| × |V| array of minimum distances initialized to ∞ (infinity)
+             2 for each vertex v
+             3    dist[v][v] ← 0
+             4 for each edge (u,v)
+             5    dist[u][v] ← w(u,v)  // the weight of the edge (u,v)
+             6 for k from 1 to |V|
+             7    for i from 1 to |V|
+             8       for j from 1 to |V|
+             9          if dist[i][j] > dist[i][k] + dist[k][j]
+             10             dist[i][j] ← dist[i][k] + dist[k][j]
+             11         end if
+             */
+            
+            
+            // initialized dist to ∞ (infinity)
+            for (Function::const_iterator v_iter = func.begin(); v_iter != func.end(); ++v_iter)
+            {
+                const BasicBlock *v_Block = &*v_iter;
+                for (Function::const_iterator u_iter = func.begin(); u_iter != func.end(); ++u_iter)
+                {
+                    const BasicBlock *u_Block = &*u_iter;
+                    dist[v_Block][u_Block] = infinity;
+                    
+                    // note: for path recon
+                    //let next be a |V| × |V| array of vertex indices initialized to null
+                    next[v_Block][u_Block] = nullptr;
+                }
+            }
+            //errs() << "init to int max: \n";
+            //printMap(dist);
+            
+            //4-5
+            for (Function::const_iterator v_iter = func.begin(); v_iter != func.end(); ++v_iter)
+            {
+                const BasicBlock *v_Block = &*v_iter;
+                const TerminatorInst *termInst = v_Block->getTerminator();
+                for (unsigned int v_succIndex = 0; v_succIndex < termInst->getNumSuccessors(); v_succIndex++)
+                {
+                    const BasicBlock *v_succ = termInst->getSuccessor(v_succIndex);
+                    dist[v_Block][v_succ] = minValue;
+                    
+                    //  note: path Recon next[u][v] ← v
+                    next[v_Block][v_succ] = v_succ;
+                }
+            }
+            
+            //errs() << "add min path weights:\n";
+            //printMap(dist);
+            
+            //line 2-3
+            for (Function::const_iterator v_iter = func.begin(); v_iter != func.end(); ++v_iter)
+            {
+                const BasicBlock *v_Block = &*v_iter;
+                dist[v_Block][v_Block] = 0;
+            }
+            
+            //errs() << "0 out [v][v]:\n";
+            //printMap(dist);
+            
+            //line 6-11
+            for (Function::const_iterator k_iter = func.begin(); k_iter != func.end(); ++k_iter)
+            {
+                const BasicBlock *k_Block = &*k_iter;
+                for (Function::const_iterator i_iter = func.begin(); i_iter != func.end(); ++i_iter)
+                {
+                    const BasicBlock *i_Block = &*i_iter;
+                    for (Function::const_iterator j_iter = func.begin(); j_iter != func.end(); ++j_iter)
+                    {
+                        const BasicBlock *j_Block = &*j_iter;
+                        if (dist[i_Block][j_Block] > dist[i_Block][k_Block] + dist[k_Block][j_Block])
+                        {
+                            dist[i_Block][j_Block] = dist[i_Block][k_Block] + dist[k_Block][j_Block];
+                            
+                            // note: path Recon next[i][j] ← next[i][k]
+                            next[i_Block][j_Block] = next[i_Block][k_Block];
+                            
+                        }
+                    }
+                }
+            }
+            errs() << "Warshall graph:\n";
+            printMap(dist);
+            
+            errs() << "Warshall next graph:\n";
+            printMap(next);
+            errs() << "Warshall next graph pointers:\n";
+            printMapPointer(next);
+        }
+        
+        void getAnalysisUsage(AnalysisUsage &AU) const override
+        {
+            AU.addRequired<DominatorTreeWrapperPass>();
+            AU.setPreservesAll();
+        }
+        
+        bool doFinalization(Module &M) override {
+            json j = HelperFunctions::createAndWriteJson(vecWarshallCounts, vecWarshallFuncName, "WarshLoopCount", true, false);
+            errs() << j.dump();
+            return false;
+        }
+    };
+}
+
+char Warshall3_2::ID = 0;
+std::vector<int> Warshall3_2::vecWarshallCounts;
+std::vector<std::string> Warshall3_2::vecWarshallFuncName;
+static RegisterPass<Warshall3_2>
+F("warshloopdetector", "counts loop using warshall.");
+
+
+namespace
+{
+    //3.3  find a basic block whose predicate’s outcome decides the direction of the branch
+    //     which in turn decides execution condition of a basic block further down in the control path.
+    //     Def: In a CFG, a basic block j is control dependent on basic block i if
+    //     I. There exists a non-null path p from i to j such that j post-dominates every node on path p after i
+    //     II. j does not strictly post-dominate i
+    //     clarify:  j post-dominates one of the successors of i but not the other one
+    struct ControlDependence  : public FunctionPass
+    {
+        //static std::vector<int> vecCount;
+        //static std::vector<std::string> vecFuncNames;
+        static char ID; // Pass identification, replacement for typeid
+        
+        ControlDependence() :  FunctionPass(ID) {}
+        virtual ~ControlDependence() {}
+        
+        bool runOnFunction(Function &F) override
+        {
+            postDomAnalysis(F);
+            return false;
+        }
+        
+        void printMap(std::map<const BasicBlock *, std::vector<BasicBlock *>> &aMap)
+        {
+            if(aMap.size() == 0)
+            {
+                errs() << "found no dependencies\n";
+            }
+            
+            for (auto& t : aMap)
+            {
+                t.first->printAsOperand(errs(), false);
+                errs() << ": ";
+                printVector(t.second);
+            }
+        }
+        
+        void printVector(std::vector<BasicBlock *> &avector)
+        {
+            errs() << "[";
+            for (auto v = avector.begin(); v != avector.end(); ++v)
+            {
+                (*v)->printAsOperand(errs(), false);
+                errs() << " ";
+            }
+            errs() << "]\n";
+        }
+        
+        void postDomAnalysis(Function &func)
+        {
+            errs() << "Start postDomAnalysis on "<< func.getName() << ":\n";
+            std::map<const BasicBlock *, std::vector<BasicBlock *>> postDominateMap;
+            PostDominatorTree *postDomTree = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
+            for (Function::const_iterator i_iter = func.begin(); i_iter != func.end(); ++i_iter)
+            {
+                const BasicBlock *i_Block = &*i_iter;
+                for (Function::const_iterator j_iter = func.begin(); j_iter != func.end(); ++j_iter)
+                {
+                     const BasicBlock *j_Block = &*i_iter;
+                    if (!postDomTree->dominates(j_Block, i_Block)) // j does not strictly post-dominate i
+                    {
+                        errs() << "( J: "<<j_Block << "does not Dominate: " << i_Block << ")";
+                        //such that j post-dominates every node on path p after i
+                        // so now we need the successors of i
+                        const TerminatorInst *termInst = i_Block->getTerminator();
+                        int iSuccCount = termInst->getNumSuccessors();
+                        std::vector<BasicBlock *> dominatedSuccs;
+                        bool bAllDominated = true;
+                        for(int i = 0; i < iSuccCount; i++)
+                        {
+                            BasicBlock *i_Succ = termInst->getSuccessor(i);
+                            //here j needs to post dominate every node
+                            if (postDomTree->dominates(j_Block, i_Succ))
+                            {
+                                dominatedSuccs.push_back(i_Succ);
+                                errs() << "( J: "<<j_Block << "Dominates: " << i_Succ << ")";
+                            }
+                            else
+                            {
+                                bAllDominated = false;
+                                break;
+                            }
+                        }
+                        if(bAllDominated)
+                        {
+                            postDominateMap[j_Block] = dominatedSuccs;
+                        }
+                    }
+                }
+            }
+            printMap(postDominateMap);
+        }
+        
+        void getAnalysisUsage(AnalysisUsage &AU) const override
+        {
+            AU.addRequired<PostDominatorTreeWrapperPass>();
+            AU.setPreservesAll();
+        }
+
+        bool doFinalization(Module &M) override {
+            /*json j = HelperFunctions::createAndWriteJson(vecCount, vecFuncNames, "ControlDependence", true, false);
+            errs() << j.dump();*/
+            return false;
+        }
+    };
+}
+
+
+//std::vector<int> ControlDependence::vecCount;
+//std::vector<std::string> ControlDependence::vecFuncNames;
+char ControlDependence::ID = 0;
+static RegisterPass<ControlDependence>
+G("controldep", "find a basicblock predicate's that decide the direction of the branch ");

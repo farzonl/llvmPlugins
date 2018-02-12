@@ -68,6 +68,21 @@ int whileLoopTest()
   return 0;            // | BLOCK 4
 }
 
+int whileLoopTestGOTO()
+{
+  int i = 0;
+  START:       
+  while(i < 10)    
+  {
+    i++;
+    if(i == 5)
+    {
+      goto START;
+    }
+  }
+  return 0;
+}   
+
 int threewhileLoopTest()
 {
   int i = 0;           // | BLOCK 1
@@ -298,5 +313,23 @@ int multinestedforLoopBreakTest()
         break;
     }
   }
+  return 0;
+}
+
+int dependence()
+{
+  int A = 1;
+  int B = 2;
+  int C = A + B;
+  int D = C - A;
+
+  D = B * D;
+  D = A + B;
+  int E = 0;
+  E = E + 1;
+  B = A + B;
+  E = C - A;
+  A = B * D;
+  B = A - D;
   return 0;
 }

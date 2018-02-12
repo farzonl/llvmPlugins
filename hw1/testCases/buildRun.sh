@@ -1,2 +1,2 @@
-clang test1.c -o test1
+../../llvmBuild/bin/clang test1.c -o test1
 ./test1
