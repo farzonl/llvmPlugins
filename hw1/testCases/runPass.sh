@@ -15,4 +15,7 @@ echo -e "\n\n toploops:"
 ../../llvmBuild/bin/opt -load ../../llvmBuild/lib/LLVMBackEdges.dylib -toploops < test1.bc > /dev/null
 echo -e "\n\n exitcfgloops:"
 ../../llvmBuild/bin/opt -load ../../llvmBuild/lib/LLVMBackEdges.dylib -exitcfgloops < test1.bc > /dev/null
-echo -e "\n"
+echo -e "\n\n warshloopdetector:"
+../../llvmBuild/bin/opt -load ../../llvmBuild/lib/LLVMBackEdges.dylib -warshloopdetector < test1.bc > /dev/null
+echo -e "\n\n controldep:"
+../../llvmBuild/bin/opt -load ../../llvmBuild/lib/LLVMBackEdges.dylib -controldep < test1.bc > /dev/null

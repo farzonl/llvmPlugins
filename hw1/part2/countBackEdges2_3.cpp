@@ -126,7 +126,7 @@ namespace
 
         bool doFinalization(Module &M) override {
             json j = HelperFunctions::createAndWriteJson(vecBasicBlockCount, vecBasicBlockFuncName, "BasicBlockCount");
-            errs() << j.dump();
+            errs() << j.dump() <<"\n";
             return false;
         }
 
@@ -174,7 +174,7 @@ namespace
         bool doFinalization(Module &M) override {
             
             json j = HelperFunctions::createAndWriteJson(veccCFGEdgeCount, vecCFGEdgeFuncName, "CFGEdgeCount");
-            errs() << j.dump();
+            errs() << j.dump() <<"\n";
             return false;
         }
     };
@@ -223,7 +223,7 @@ namespace
     
     bool doFinalization(Module &M) override {
         json j = HelperFunctions::createAndWriteJson(vecBackEdgeCount, vecBackEdgeFuncName, "BackEdgeCount");
-        errs() << j.dump();
+        errs() << j.dump() <<"\n";
         return false;
     }
   };
@@ -278,7 +278,7 @@ namespace
         
         bool doFinalization(Module &M) override {
             json j = HelperFunctions::createAndWriteJson(vecLoopBasicBlockCount, vecLoopBasicBlockFuncName, "LoopBasicBlockCount");
-            errs() << j.dump();
+            errs() << j.dump() <<"\n";
             return false;
         }
     };
@@ -342,7 +342,7 @@ namespace
         bool doFinalization(Module &M) override {
             json j = HelperFunctions::createAndWriteJson(vecLoopDominatorsCount, vecDominatorsFuncName, "DominatorsCount");
             
-            errs() << j.dump();
+            errs() << j.dump() <<"\n";
             return false;
         }
     };
@@ -407,7 +407,7 @@ namespace
         
         bool doFinalization(Module &M) override {
             json j = HelperFunctions::createAndWriteJson(vecFuncLoopCounts, vecFuncLoopCountsFuncName, "AllLoopsCount", true, false, false);
-            errs() << j.dump();
+            errs() << j.dump() <<"\n";
             return false;
         }
     };
@@ -515,7 +515,7 @@ namespace
         
         bool doFinalization(Module &M) override {
             json j = HelperFunctions::createAndWriteJson(vecExitCFGLoopCount, vecExitCFGLoopFuncNames, "LoopExitCFGCount", true, false);
-            errs() << j.dump();
+            errs() << j.dump() <<"\n";
             return false;
         }
     };
@@ -712,7 +712,7 @@ namespace
                                     predList.push_back(&currBlock);
                                     predList.push_back(searchNode);
                                     std::string predListHash = getPathHash(predList);
-                                    errs() << "\npath: " << predListHash << "\n";
+                                    //errs() << "\npath: " << predListHash << "\n";
                                     /*errs() << "[ (";
                                     searchNode->printAsOperand(errs(), false);
                                     errs() << " ," << searchNode << "), ";
@@ -806,8 +806,8 @@ namespace
                             }
                             if(addToSeenPaths)
                             {
-                                errs() << "\nnew path found:\n";
-                                printVector(path);
+                                //errs() << "\nnew path found:\n";
+                                //printVector(path);
                                 seenPaths.push_back(path);
                                 iLoopCounter += LoopCounter(func, path, seenPathsPred);
                             }
@@ -926,7 +926,7 @@ namespace
         
         bool doFinalization(Module &M) override {
             json j = HelperFunctions::createAndWriteJson(vecWarshallCounts, vecWarshallFuncName, "WarshLoopCount", true, false);
-            errs() << j.dump();
+            errs() << j.dump() <<"\n";
             return false;
         }
     };
@@ -949,8 +949,8 @@ namespace
     //     clarify:  j post-dominates one of the successors of i but not the other one
     struct ControlDependence  : public FunctionPass
     {
-        //static std::vector<int> vecCount;
-        //static std::vector<std::string> vecFuncNames;
+        static std::vector<int> vecCount;
+        static std::vector<std::string> vecFuncNames;
         static char ID; // Pass identification, replacement for typeid
         
         ControlDependence() :  FunctionPass(ID) {}
@@ -971,8 +971,9 @@ namespace
             
             for (auto& t : aMap)
             {
+                errs() << "<" << t.first << ": ";
                 t.first->printAsOperand(errs(), false);
-                errs() << ": ";
+                errs() << " >= ";
                 printVector(t.second);
             }
         }
@@ -982,14 +983,16 @@ namespace
             errs() << "[";
             for (auto v = avector.begin(); v != avector.end(); ++v)
             {
+                errs() << "(" << (*v) <<": ";
                 (*v)->printAsOperand(errs(), false);
-                errs() << " ";
+                errs() << "), ";
             }
             errs() << "]\n";
         }
         
         void postDomAnalysis(Function &func)
         {
+            int controlDependenceCount = 0;
             errs() << "Start postDomAnalysis on "<< func.getName() << ":\n";
             std::map<const BasicBlock *, std::vector<BasicBlock *>> postDominateMap;
             PostDominatorTree *postDomTree = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
@@ -998,39 +1001,32 @@ namespace
                 const BasicBlock *i_Block = &*i_iter;
                 for (Function::const_iterator j_iter = func.begin(); j_iter != func.end(); ++j_iter)
                 {
-                     const BasicBlock *j_Block = &*i_iter;
+                     const BasicBlock *j_Block = &*j_iter;
                     if (!postDomTree->dominates(j_Block, i_Block)) // j does not strictly post-dominate i
                     {
-                        errs() << "( J: "<<j_Block << "does not Dominate: " << i_Block << ")";
+                        //errs() << "( J: "<<j_Block << "does not Dominate I: " << i_Block << ")";
                         //such that j post-dominates every node on path p after i
                         // so now we need the successors of i
                         const TerminatorInst *termInst = i_Block->getTerminator();
                         int iSuccCount = termInst->getNumSuccessors();
-                        std::vector<BasicBlock *> dominatedSuccs;
-                        bool bAllDominated = true;
                         for(int i = 0; i < iSuccCount; i++)
                         {
                             BasicBlock *i_Succ = termInst->getSuccessor(i);
                             //here j needs to post dominate every node
                             if (postDomTree->dominates(j_Block, i_Succ))
                             {
-                                dominatedSuccs.push_back(i_Succ);
-                                errs() << "( J: "<<j_Block << "Dominates: " << i_Succ << ")";
+                                controlDependenceCount++;
+                                postDominateMap[j_Block].push_back(i_Succ);
+                                //errs() << "( J: "<<j_Block << "Dominates: " << i_Succ << ")\n";
                             }
-                            else
-                            {
-                                bAllDominated = false;
-                                break;
-                            }
-                        }
-                        if(bAllDominated)
-                        {
-                            postDominateMap[j_Block] = dominatedSuccs;
                         }
                     }
                 }
             }
+            vecCount.push_back(controlDependenceCount);
+            vecFuncNames.push_back(func.getName());
             printMap(postDominateMap);
+            errs() << "\n";
         }
         
         void getAnalysisUsage(AnalysisUsage &AU) const override
@@ -1040,16 +1036,16 @@ namespace
         }
 
         bool doFinalization(Module &M) override {
-            /*json j = HelperFunctions::createAndWriteJson(vecCount, vecFuncNames, "ControlDependence", true, false);
-            errs() << j.dump();*/
+            json j = HelperFunctions::createAndWriteJson(vecCount, vecFuncNames, "ControlDependence", true, false);
+            errs() << j.dump() <<"\n";
             return false;
         }
     };
 }
 
 
-//std::vector<int> ControlDependence::vecCount;
-//std::vector<std::string> ControlDependence::vecFuncNames;
+std::vector<int> ControlDependence::vecCount;
+std::vector<std::string> ControlDependence::vecFuncNames;
 char ControlDependence::ID = 0;
 static RegisterPass<ControlDependence>
 G("controldep", "find a basicblock predicate's that decide the direction of the branch ");
