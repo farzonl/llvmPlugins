@@ -24,8 +24,8 @@
 #include<valarray>
 #include <fstream>
 #include <sstream>      // std::stringstream, std::stringbuf
-
-
+#include <stack>
+#include <set>
 using json = nlohmann::json;
 using namespace llvm;
 
@@ -1049,3 +1049,137 @@ std::vector<std::string> ControlDependence::vecFuncNames;
 char ControlDependence::ID = 0;
 static RegisterPass<ControlDependence>
 G("controldep", "find a basicblock predicate's that decide the direction of the branch ");
+
+namespace
+{
+    //3.4 this function returns true if there exists a directed path from basic block A to B, false otherwise.
+    struct ReachablePass  : public FunctionPass
+    {
+        static std::vector<int> vecCount;
+        static std::vector<std::string> vecFuncNames;
+        static char ID; // Pass identification, replacement for typeid
+        
+        ReachablePass() :  FunctionPass(ID) {}
+        virtual ~ReachablePass() {}
+        
+        bool runOnFunction(Function &F) override
+        {
+            reachable(F);
+            return false;
+        }
+        
+        void printList(std::vector<const BasicBlock *> &list)
+        {
+            if(list.empty())
+            {
+                return;
+            }
+            
+            errs() << "[";
+            for (auto v = list.begin(); v != list.end(); ++v)
+            {
+                errs() << "(" << (*v) <<": ";
+                (*v)->printAsOperand(errs(), false);
+                errs() << "), ";
+            }
+            errs() << "]\n";
+        }
+
+        
+        void reachable(Function &func)
+        {
+            errs() << "Start reachable analysis on "<< func.getName() << ":\n";
+            int nReachable = 0;
+            int nNotReachable = 0;
+            int longestReachablePath = 0;
+            std::vector<const BasicBlock*> longestPath;
+            for (Function::const_iterator i_iter = func.begin(); i_iter != func.end(); ++i_iter)
+            {
+                const BasicBlock *A_Block = &*i_iter;
+                for (Function::const_iterator j_iter = func.begin(); j_iter != func.end(); ++j_iter)
+                {
+                    const BasicBlock *B_Block = &*j_iter;
+                    //need to perform a graph search from i to j
+                    std::vector<const BasicBlock*> path = dfs(A_Block, B_Block, nReachable);
+                    if((int) path.size() >longestReachablePath)
+                    {
+                        longestReachablePath = path.size();
+                        longestPath = path;
+                    }
+                    if(path.empty())
+                    {
+                        nNotReachable++;
+                    //    errs() << "{B: "<<B_Block << "} is Not reachable from {A:"<< A_Block << "}" ;
+                    }
+                    //printList(path);
+                }
+            }
+            int totalPaths = nReachable+nNotReachable;
+            errs() << "reachablility score:"<<nReachable << "/" << totalPaths << " = " << nReachable/static_cast<double>(totalPaths)<< "\n";
+            errs() << "longest reachable path: " << longestReachablePath << "\n";
+            errs() << "longest path: ";
+            printList(longestPath);
+            errs() << "End reachable analysis on "<< func.getName() <<"\n\n";
+            vecCount.push_back(nReachable);
+            vecFuncNames.push_back(func.getName());
+        }
+        
+        /*
+         1  procedure DFS-iterative(G,v):
+         2      let S be a stack
+         3      S.push(v)
+         4      while S is not empty
+         5          v = S.pop()
+         6          if v is not labeled as discovered:
+         7              label v as discovered
+         8              for all edges from v to w in G.adjacentEdges(v) do
+         9                  S.push(w)
+         */
+        
+        std::vector<const BasicBlock*> dfs(const BasicBlock* A, const BasicBlock* B, int &reachable)
+        {
+            std::stack<std::pair<const BasicBlock*,std::vector<const BasicBlock*>>> s;
+            std::set<const BasicBlock*> visited;
+            s.push(std::make_pair(A,std::vector<const BasicBlock*>({A})));
+            
+            while(!s.empty())
+            {
+                const BasicBlock* v = s.top().first;
+                std::vector<const BasicBlock*> path = s.top().second;
+                s.pop();
+                if(visited.find(v) == visited.end())
+                {
+                    visited.insert(v);
+                    const TerminatorInst *termInst = v->getTerminator();
+                    int numEdges = termInst->getNumSuccessors();
+                    for(int i = 0; i < numEdges; i++)
+                    {
+                        BasicBlock *w = termInst->getSuccessor(i);
+                        path.push_back(w);
+                        
+                        if(w == B)
+                        {
+                            reachable++;
+                            return path;
+                        }
+                        std::vector<const BasicBlock*> cpyPath(path);
+                        cpyPath.push_back(w);
+                        s.push(std::make_pair(w,cpyPath));
+                    }
+                }
+            }
+            return std::vector<const BasicBlock*>();
+        }
+        
+        bool doFinalization(Module &M) override {
+            json j = HelperFunctions::createAndWriteJson(vecCount, vecFuncNames, "NodesReachable", true, false);
+            errs() << j.dump() <<"\n";
+            return false;
+        }
+    };
+}
+std::vector<int> ReachablePass::vecCount;
+std::vector<std::string> ReachablePass::vecFuncNames;
+char ReachablePass::ID = 0;
+static RegisterPass<ReachablePass>
+H("reachable", "find reachability from A to B");
