@@ -41,7 +41,9 @@ namespace
                                   const std::string &countName,
                                   bool turnOnSummation = false,
                                   bool turnOnMin = true,
-                                  bool turnOnAvg = true)
+                                  bool turnOnAvg = true,
+                                  bool writeToFile = true,
+                                  bool eraseTest = true)
         {
             std::valarray<int> seq {vecCount.data(), vecCount.size()};
             double average = seq.sum()/static_cast<double>(vecCount.size());
@@ -89,12 +91,59 @@ namespace
             j["Test"] = jTest;
 #endif
 
+            if(writeToFile)
+            {
+                std::ofstream o("testResults/"+countName+".json");
+                o << std::setw(4) << j << std::endl;
+            }
+#if TEST
+            if(eraseTest)
+            {
+                j.erase("Test");
+            }
+#endif
+            return j;
+        }
+        
+         static void AddDominatorToJson(const std::vector<double> & domCount,json &j,
+                                        const std::string &countName)
+        {
+            std::valarray<double> seq {domCount.data(), domCount.size()};
+            double average = seq.sum()/static_cast<double>(domCount.size());
+            
+            double iMax = seq.max();
+            double iMin = seq.min();
+            
+            std::string sMaxFuncName;
+            std::string sMinFuncName;
+            for (size_t i = 0; i < domCount.size(); i++)
+            {
+                if(iMax == domCount[i])
+                {
+                    sMaxFuncName = j["Test"][i]["functionName"];
+                }
+                if(iMin == domCount[i])
+                {
+                    sMinFuncName = j["Test"][i]["functionName"];
+                }
+            }
+            
+            j["DomByBlockAverage"] = average;
+            j["DomByBlockMax"] = {sMaxFuncName, iMax};
+            j["DomByBlockMin"] = {sMinFuncName, iMin};
+              
+#if TEST
+            for (size_t i = 0; i < domCount.size(); i++)
+            {
+                j["Test"][i]["DomPerBlock"] = domCount[i];
+            }
+#endif
             std::ofstream o("testResults/"+countName+".json");
             o << std::setw(4) << j << std::endl;
+
 #if TEST
             j.erase("Test");
 #endif
-            return j;
         }
     private:
         HelperFunctions() = delete;
@@ -208,13 +257,27 @@ namespace
         AU.addRequired<LoopInfoWrapperPass>();
     }
     
+    void getLoopCountNested(const Loop &Toploop, int &backEdgesCount) const
+    {
+        std::vector<Loop *> nestedloops = Toploop.getSubLoops();
+          
+        for (Loop::iterator iter = nestedloops.begin(); iter != nestedloops.end(); ++iter)
+        {
+            Loop *loop =*iter;
+            backEdgesCount+=loop->getNumBackEdges();
+            getLoopCountNested(*loop,backEdgesCount);
+          }
+    }
+    
     void getBackEdgeInfo(const Function& func) const
     {
         LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
         int backEdgesCount = 0;
         for (Loop::iterator iter = loopInfo.begin(); iter != loopInfo.end(); ++iter)
         {
-            backEdgesCount+=(*iter)->getNumBackEdges();
+            const Loop *loop =*iter;
+            backEdgesCount+=loop->getNumBackEdges();
+            getLoopCountNested(*loop, backEdgesCount);
             
         }
         vecBackEdgeCount.push_back(backEdgesCount);
@@ -297,6 +360,7 @@ namespace
     {
         static std::vector<int> vecLoopDominatorsCount;
         static std::vector<std::string> vecDominatorsFuncName;
+        static std::vector<double> vecLoopDominatorsByBlock;
         static char ID; // Pass identification, replacement for typeid
         DominatorsPass() :  FunctionPass(ID) {}
         virtual ~DominatorsPass() {}
@@ -329,19 +393,22 @@ namespace
                         continue;
                     }*/
                     const BasicBlock &nextBlock = *nextIter;
-                    if (DomTree.properlyDominates(&nextBlock, &currBlock))
+                    if (DomTree.dominates(&nextBlock, &currBlock))
                     {
                         domCounter++;
                     }
                 }
             }
+            vecLoopDominatorsByBlock.push_back(domCounter / static_cast<double>(func.size()));
             vecLoopDominatorsCount.push_back(domCounter);
             vecDominatorsFuncName.push_back(func.getName());
         }
         
         bool doFinalization(Module &M) override {
-            json j = HelperFunctions::createAndWriteJson(vecLoopDominatorsCount, vecDominatorsFuncName, "DominatorsCount");
+            const std::string jsonFileName = "DominatorsCount";
+            json j = HelperFunctions::createAndWriteJson(vecLoopDominatorsCount, vecDominatorsFuncName, jsonFileName, false, true, true, false, false);
             
+            HelperFunctions::AddDominatorToJson(vecLoopDominatorsByBlock, j, jsonFileName);
             errs() << j.dump() <<"\n";
             return false;
         }
@@ -349,10 +416,80 @@ namespace
 }
 
 std::vector<int> DominatorsPass::vecLoopDominatorsCount;
+std::vector<double> DominatorsPass::vecLoopDominatorsByBlock;
 std::vector<std::string> DominatorsPass::vecDominatorsFuncName;
 char DominatorsPass::ID = 0;
 static RegisterPass<DominatorsPass>
-B("dominatorspass", "loop basic block counter pass.");
+B("dominatorspass", "loop dominates pass.");
+
+namespace
+{
+    // 2.5 Average number of dominators for a basic block across all functions.
+    struct PropDominatorsPass : public FunctionPass
+    {
+        static std::vector<double> vecLoopDominatorsByBlock;
+        static std::vector<int> vecLoopDominatorsCount;
+        static std::vector<std::string> vecDominatorsFuncName;
+        static char ID; // Pass identification, replacement for typeid
+        PropDominatorsPass() :  FunctionPass(ID) {}
+        virtual ~PropDominatorsPass() {}
+        
+        bool runOnFunction(Function &F) override
+        {
+            getDominatorsInfo(F);
+            return false;
+        }
+        
+        void getAnalysisUsage(AnalysisUsage &AU) const override
+        {
+            AU.addRequired<DominatorTreeWrapperPass>();
+            AU.setPreservesAll();
+        }
+        
+        void getDominatorsInfo(const Function& func) const
+        {
+            DominatorTree &DomTree = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+            int domCounter = 0;
+            for (Function::const_iterator iter = func.begin(); iter != func.end(); ++iter)
+            {
+                const BasicBlock &currBlock = *iter;
+                for (Function::const_iterator nextIter = func.begin(); nextIter != func.end(); ++nextIter)
+                {
+                    // does a block dominate itself? It does
+                    // what about strict dominance?
+                    /*if(iter == nextIter)
+                     {
+                     continue;
+                     }*/
+                    const BasicBlock &nextBlock = *nextIter;
+                    if (DomTree.properlyDominates(&nextBlock, &currBlock))
+                    {
+                        domCounter++;
+                    }
+                }
+            }
+            vecLoopDominatorsByBlock.push_back(domCounter / static_cast<double>(func.size()));
+            vecLoopDominatorsCount.push_back(domCounter);
+            vecDominatorsFuncName.push_back(func.getName());
+        }
+        
+        bool doFinalization(Module &M) override {
+            const std::string jsonFileName = "PropDominatorsPass";
+            json j = HelperFunctions::createAndWriteJson(vecLoopDominatorsCount, vecDominatorsFuncName, jsonFileName,false, true, true, false, false);
+            
+            HelperFunctions::AddDominatorToJson(vecLoopDominatorsByBlock, j, jsonFileName);
+            
+            errs() << j.dump() <<"\n";
+            return false;
+        }
+    };
+}
+std::vector<double> PropDominatorsPass::vecLoopDominatorsByBlock;
+std::vector<int> PropDominatorsPass::vecLoopDominatorsCount;
+std::vector<std::string> PropDominatorsPass::vecDominatorsFuncName;
+char PropDominatorsPass::ID = 0;
+static RegisterPass<PropDominatorsPass>
+BB("propdompass", "loop properly dominates pass.");
 
 namespace
 {
@@ -483,7 +620,7 @@ namespace
         
         bool runOnFunction(Function &F) override
         {
-            getLoopCount(F);
+            getLoopExitCount(F);
             return false;
         }
         
@@ -493,22 +630,53 @@ namespace
             AU.addRequired<LoopInfoWrapperPass>();
         }
         
-        void getLoopCount(const Function& func) const
+        /*void getLoopCountNested(const Loop &Toploop, int &loopExitCounter) const
         {
-            LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-            int loopExitCounter = 0;
-            for (Loop::iterator iter = loopInfo.begin(); iter != loopInfo.end(); ++iter)
+            std::vector<Loop *> nestedloops = Toploop.getSubLoops();
+            
+            for (Loop::iterator iter = nestedloops.begin(); iter != nestedloops.end(); ++iter)
             {
-                Loop *loop = *iter;
+                Loop *loop =*iter;
                 for(Loop::block_iterator bIter = loop->block_begin(); bIter != loop->block_end(); ++bIter)
                 {
                     const BasicBlock *loopBlock = *bIter;
                     if(loop->isLoopExiting(loopBlock))
                     {
                         loopExitCounter++;
+                        getLoopCountNested(*loop, loopExitCounter);
                     }
                 }
             }
+        }*/
+        
+        void getLoopExitCount(const Function& func) const
+        {
+            LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+            int loopExitCounter = 0;
+            /*for (Loop::iterator iter = loopInfo.begin(); iter != loopInfo.end(); ++iter)
+            {
+                Loop *loop = *iter;
+                for(Loop::block_iterator bIter = loop->block_begin(); bIter != loop->block_end(); ++bIter)
+                {
+                    const BasicBlock *loopBlock = *bIter;
+                    
+                    if(loop->isLoopExiting(loopBlock))
+                    {
+                        loopExitCounter++;
+                    }
+                    getLoopCountNested(*loop, loopExitCounter);
+                }
+            }*/ //Result is coming out too low with out nested at 26 and too high with at 227
+            
+            for (Function::const_iterator iter = func.begin(); iter != func.end(); ++iter) {
+                const BasicBlock &currBlock = *iter;
+                Loop *loop = loopInfo.getLoopFor(&currBlock);
+                if (loop != nullptr && loop->isLoopExiting(&currBlock))
+                {
+                    loopExitCounter++;
+                }
+            }
+            
             vecExitCFGLoopCount.push_back(loopExitCounter);
             vecExitCFGLoopFuncNames.push_back(func.getName());
         }
@@ -555,7 +723,7 @@ namespace
         
         bool runOnFunction(Function &F) override
         {
-            errs() << F.getName();
+            errs() << F.getName() <<":\n";
             matBasicBlocks dist;
             matSucBasicBlocks next;
             warhsalAlgo(F, dist, next);
@@ -696,7 +864,6 @@ namespace
                 const BasicBlock* searchNode = *node;
                 for (Function::const_iterator iter = func.begin(); iter != func.end(); ++iter)
                 {
-                    bool done = false;
                     const BasicBlock &currBlock = *iter;
                     if(std::find(path.begin(), path.end(), &currBlock) == path.end())
                     {
@@ -713,23 +880,22 @@ namespace
                                     predList.push_back(searchNode);
                                     std::string predListHash = getPathHash(predList);
                                     //errs() << "\npath: " << predListHash << "\n";
-                                    /*errs() << "[ (";
-                                    searchNode->printAsOperand(errs(), false);
-                                    errs() << " ," << searchNode << "), ";
-                                    v_succ->printAsOperand(errs(), false);
-                                    errs() << " ," << v_succ << ") ]\n";*/
+                                    
                                     if(seenPathsPred.find(predListHash) == seenPathsPred.end())
                                     {
+                                        errs() << "PredList added:\n [";
+                                        currBlock.printAsOperand(errs(), false);
+                                        errs() << " ";
+                                        searchNode->printAsOperand(errs(), false);
+                                        errs() << " ]\n";
                                         seenPathsPred[predListHash] = true;
                                         iLoopCounter++;
-                                        done = true;
                                         break;
                                     }
                                 }
                             }
                         }
                     }
-                    if(done) break;
                 }
             }
             return iLoopCounter;
@@ -786,6 +952,8 @@ namespace
                     basicBlockPath path = mergePaths(vuPath, uvPath);
                     std::string pathHash = getPathHash(path);
                     
+                    //errs() << "\npath before edit:\n";
+                    //printVector(path);
                     if(seenPathCombos.find(pathHash) == seenPathCombos.end())
                     {
                         seenPathCombos[pathHash] = true;
@@ -806,8 +974,8 @@ namespace
                             }
                             if(addToSeenPaths)
                             {
-                                //errs() << "\nnew path found:\n";
-                                //printVector(path);
+                                errs() << "\nnew path found:\n";
+                                printVector(path);
                                 seenPaths.push_back(path);
                                 iLoopCounter += LoopCounter(func, path, seenPathsPred);
                             }
@@ -914,8 +1082,8 @@ namespace
             
             errs() << "Warshall next graph:\n";
             printMap(next);
-            errs() << "Warshall next graph pointers:\n";
-            printMapPointer(next);
+            //errs() << "Warshall next graph pointers:\n";
+            //printMapPointer(next);
         }
         
         void getAnalysisUsage(AnalysisUsage &AU) const override
@@ -971,9 +1139,9 @@ namespace
             
             for (auto& t : aMap)
             {
-                errs() << "<" << t.first << ": ";
+                //errs() << "<" << t.first << ": ";
                 t.first->printAsOperand(errs(), false);
-                errs() << " >= ";
+                errs() << /*" >*/"= ";
                 printVector(t.second);
             }
         }
@@ -983,9 +1151,9 @@ namespace
             errs() << "[";
             for (auto v = avector.begin(); v != avector.end(); ++v)
             {
-                errs() << "(" << (*v) <<": ";
+                //errs() << "(" << (*v) <<": ";
                 (*v)->printAsOperand(errs(), false);
-                errs() << "), ";
+                //errs() << "), ";
             }
             errs() << "]\n";
         }
@@ -1078,9 +1246,10 @@ namespace
             errs() << "[";
             for (auto v = list.begin(); v != list.end(); ++v)
             {
-                errs() << "(" << (*v) <<": ";
+                //errs() << "(" << (*v) <<": ";
                 (*v)->printAsOperand(errs(), false);
-                errs() << "), ";
+                //errs() << "), ";
+                errs() << " ";
             }
             errs() << "]\n";
         }
@@ -1105,6 +1274,17 @@ namespace
                     {
                         longestReachablePath = path.size();
                         longestPath = path;
+                        //TODO need a way to iterate through the variables of a block
+                        //SHould be a get name on store instructions
+                        /*InstListType A_instList =  A_Block->getInstList();
+                        InstListType B_instList =  B_Block->getInstList();
+                        for(InstListType::const_iterator instrIter = A_instList.begin(); instrIter != A_instList.end(); ++instList)
+                        {
+                            for(InstListType::const_iterator B_instrIter = B_instList.begin(); instrIter != B_instList.end(); ++instList)
+                            {
+                                
+                            }
+                        }*/
                     }
                     if(path.empty())
                     {
@@ -1125,6 +1305,7 @@ namespace
         }
         
         /*
+         https://en.wikipedia.org/wiki/Depth-first_search#Pseudocode
          1  procedure DFS-iterative(G,v):
          2      let S be a stack
          3      S.push(v)

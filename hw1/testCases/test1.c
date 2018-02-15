@@ -333,3 +333,23 @@ int dependence()
   B = A - D;
   return 0;
 }
+
+int multiEnterLoop()
+{
+        int i;
+
+        i = 0;
+        if (i < 10)
+                goto part2;
+part1:
+        if (i > 10)
+                goto part3;
+        goto part2;
+
+part2:
+        i++;
+        goto part1;
+
+part3:
+        return 0;
+}
