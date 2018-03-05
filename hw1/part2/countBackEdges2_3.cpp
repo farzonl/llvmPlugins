@@ -13,6 +13,8 @@
  *
  */
 
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
@@ -1276,15 +1278,34 @@ namespace
                         longestPath = path;
                         //TODO need a way to iterate through the variables of a block
                         //SHould be a get name on store instructions
-                        /*InstListType A_instList =  A_Block->getInstList();
-                        InstListType B_instList =  B_Block->getInstList();
-                        for(InstListType::const_iterator instrIter = A_instList.begin(); instrIter != A_instList.end(); ++instList)
+                        const BasicBlock::InstListType* A_instList =  &A_Block->getInstList();
+                        const BasicBlock::InstListType* B_instList =  &B_Block->getInstList();
+                        
+                        
+                        for(BasicBlock::InstListType::const_iterator A_instrIter = A_instList->begin();
+                            A_instrIter != A_instList->end(); ++A_instrIter)
                         {
-                            for(InstListType::const_iterator B_instrIter = B_instList.begin(); instrIter != B_instList.end(); ++instList)
-                            {
+                            errs() << "Instruction: " << (*A_instrIter).getName() << " = ";
+                            errs() << "A operands: [ ";
+                            for (auto op = A_instrIter->op_begin(); op != A_instrIter->op_end(); op++) {
+                                (*op)->printAsOperand(errs(), false);
+                                errs() << " ";
                                 
                             }
-                        }*/
+                             errs() << "]\n";
+                        }
+                        
+                        for(BasicBlock::InstListType::const_iterator B_instrIter = B_instList->begin();
+                            B_instrIter != B_instList->end(); ++B_instrIter)
+                        {
+                            errs() << "Instruction: " << (*B_instrIter).getType() << " = ";
+                            errs() << "B operands: [ ";
+                            for (auto op = B_instrIter->op_begin(); op != B_instrIter->op_end(); op++) {
+                                (*op)->printAsOperand(errs(), false);
+                                errs() << " ";
+                            }
+                            errs() << "]\n";
+                        }
                     }
                     if(path.empty())
                     {
