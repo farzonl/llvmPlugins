@@ -1,0 +1,13 @@
+*.bc
+*.dot.png
+.DS_Store
+*.zip
+*.tar.xz
+llvm-4.0.1.src/
+submission/
+submission.zip
+7zip/
+llvmBuild/
+llvmBuildXcode/
+*.c.bk
+
