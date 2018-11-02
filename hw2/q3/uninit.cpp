@@ -144,84 +144,67 @@ namespace
             errs() << "]\n";
         }
         
-        
         void reachable(Function &func)
         {
             errs() << "Start reachable analysis on "<< func.getName() << ":\n";
             int nReachable = 0;
             std::vector<const BasicBlock*> longestPath;
             
+            const BasicBlock *lastBlock = nullptr;
+            for (Function::const_iterator i_iter = func.begin(); i_iter != func.end(); ++i_iter)
+            {
+                if(std::next(i_iter) == func.end()) {
+                    lastBlock = &*i_iter;
+                }
+            }
+
+            /*std::set<StringRef> InSet;
+            std::set<StringRef> GenSet;
+            std::set<StringRef> KillSet;
+            std::set<StringRef> OutSet;*/
+            std::set<StringRef> stored;
             for (Function::const_iterator i_iter = func.begin(); i_iter != func.end(); ++i_iter)
             {
                 const BasicBlock *A_Block = &*i_iter;
-                for (Function::const_iterator j_iter = func.begin(); j_iter != func.end(); ++j_iter)
+                std::set<StringRef> loadedWOStore;
+                
+                //need to perform a graph search from i to j
+                std::vector<const BasicBlock*> path = dfs(A_Block, lastBlock, nReachable);
+                
+                if(nReachable)
                 {
-                    const BasicBlock *B_Block = &*j_iter;
-                    //need to perform a graph search from i to j
-                    std::vector<const BasicBlock*> path = dfs(A_Block, B_Block, nReachable);
-                    if(nReachable)
-                    {
-                        std::set<StringRef> stored;
-                        std::set<StringRef> alloced;
-                        //errs() << "before path loop\n";
-                        for(size_t i = 0; i < path.size(); i++) {
-                            //errs() << "in path loop with count " << i <<"\n";
-                            const BasicBlock &currBlock = *path[i];
-                            const BasicBlock::InstListType* instList =  &currBlock.getInstList();
-                            for(BasicBlock::InstListType::const_iterator instrIter = instList->begin();
-                                instrIter != instList->end(); ++instrIter) {
-                                //errs() << "in instruction loop\n";
-                                const Instruction &currInst = *instrIter;
-                                
-                                if(isa<AllocaInst>(currInst)) {
-                                    auto op = currInst.getOperand(0);
-                                    alloced.insert(op->getName());
-                                }
-                                
-                                if(isa<StoreInst>(currInst)) {
-                                    auto op = currInst.getOperand(1);
-                                    stored.insert(op->getName());
-                                }
-                                if(isa<LoadInst>(currInst)) {
-                                    auto op = currInst.getOperand(0);
-                                    bool bNotInit = (stored.find(op->getName()) == stored.end());
-                                    if(bNotInit) {
-                                        errs() << "unitialized variable: " << op->getName();
-                                        const DebugLoc &DL = currInst.getDebugLoc();
-                                        if(DL) {
-                                            errs() << "used on line: " << DL.getLine();
-                                        }
-                                        else
-                                        {
-                                            if(const MDNode *md = currInst.getMetadata("dbg")) {
-                                                if(auto *subProgram = dyn_cast<DISubprogram>(md)) {
-                                                    errs() << "used on line: " << subProgram->getLine();
-                                                }
-                                            }
-                                        }
-                                        errs() << " found.\n";
-                                    }
-                                }
-                                //errs() << "exit instruction loop\n";
+                    for(size_t i = 0; i < path.size(); i++) {
+                        
+                        const BasicBlock &currBlock = *path[i];
+                        const BasicBlock::InstListType* instList =  &currBlock.getInstList();
+                        for(BasicBlock::InstListType::const_iterator instrIter = instList->begin();
+                            instrIter != instList->end(); ++instrIter) {
+                            
+                            const Instruction &currInst = *instrIter;
+                            
+                            if(isa<StoreInst>(currInst)) {
+                                auto op = currInst.getOperand(1);
+                                stored.insert(op->getName());
                             }
-                            //errs() << "exit path loop\n";
+                            if(isa<LoadInst>(currInst)) {
+                                auto op = currInst.getOperand(0);
+                                bool bNotInit = (stored.find(op->getName()) == stored.end());
+                                if(bNotInit) {
+                                    loadedWOStore.insert(op->getName());
+                                }
+                            }
                         }
-                        if(stored.size() != alloced.size()) {
-                            //errs() << "enter stored != alloced condition\n";
-                            std::set<StringRef> diff;
-                            std::set_difference (stored.begin(), stored.end(), alloced.begin(), alloced.end(), std::inserter(diff,diff.begin()));
-                            //errs() << "diff size is"<< diff.size() <<"\n";
-                            for (auto i : diff) {
-                                errs() << "unitialized variable: " << i;
+                            
+                        }
+                        if(loadedWOStore.size() > 0) {
+                            for (auto i : loadedWOStore) {
+                                errs() << "unitialized variable: " << i << "\n";
                             }
-                            //errs() << "exit stored != alloced condition\n";
                         }
                     }
-                    
-                }
             }
         }
-        
+    
         /*
          https://en.wikipedia.org/wiki/Depth-first_search#Pseudocode
          1  procedure DFS-iterative(G,v):
